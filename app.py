@@ -1,153 +1,105 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-import yfinance as yf
-
-from scanner import scan_market, scan_all
+from scanner import scan_all
 from watchlists import WATCHLISTS
 
 st.set_page_config(layout="wide")
-st.title("📊 Dime AI — Trading Dashboard")
+st.title("📊 Dime AI — Data Dashboard")
 
-# ---------- Sidebar ----------
-page = st.sidebar.radio("หน้า", ["📊 Dashboard", "🥇 Top 1"])
-
-wl_name = st.sidebar.selectbox("Watchlist", list(WATCHLISTS.keys()))
-default_list = WATCHLISTS[wl_name]
-
-custom = st.sidebar.text_area(
-    "แก้ไขรายการหุ้น (comma)",
-    ",".join(default_list)
-)
-
+# -------- Sidebar --------
+wl = st.sidebar.selectbox("Watchlist", list(WATCHLISTS.keys()))
+custom = st.sidebar.text_area("Tickers", ",".join(WATCHLISTS[wl]))
 tickers = tuple([x.strip().upper() for x in custom.split(",") if x.strip()])
 
-min_score = st.sidebar.slider("ขั้นต่ำ Score", 0, 100, 40)
-only_buy = st.sidebar.checkbox("แสดงเฉพาะ BUY/STRONG BUY", True)
+min_score = st.sidebar.slider("Min Score", 0, 100, 40)
 
-# ---------- Utils ----------
-def style_action(a):
-    if "STRONG BUY" in a: return "🟢", "green"
-    if "BUY" in a: return "🟩", "lime"
-    if "WAIT" in a: return "🟡", "orange"
-    return "🔴", "red"
+def style_chip(a):
+    if "STRONG BUY" in a: return "🟢 STRONG BUY"
+    if "BUY" in a: return "🟩 BUY"
+    if "WAIT" in a: return "🟡 WAIT"
+    return "🔴 NO TRADE"
 
 @st.cache_data(ttl=600)
-def run_all_cached(t):
+def run_all(t):
     return scan_all(t)
 
-@st.cache_data(ttl=600)
-def run_top_cached(t):
-    return scan_market(t)
+# -------- Dashboard --------
+if st.button("🔍 Scan Dashboard"):
 
-@st.cache_data(ttl=600)
-def load_price(ticker):
-    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-    if df is None or df.empty:
-        return None
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    c = df['Close']
-    df['EMA20'] = c.ewm(span=20).mean()
-    df['EMA50'] = c.ewm(span=50).mean()
-    exp1 = c.ewm(span=12).mean()
-    exp2 = c.ewm(span=26).mean()
-    df['MACD'] = exp1 - exp2
-    df['Signal'] = df['MACD'].ewm(span=9).mean()
-    df = df.reset_index()
-    return df
+    data = run_all(tickers)
+    df = pd.DataFrame(data)
 
-# ---------- PAGE: DASHBOARD ----------
-if page == "📊 Dashboard":
+    df = df[df['score'] >= min_score]
+    if df.empty:
+        st.warning("ไม่มีตัวที่ผ่านเงื่อนไข")
+        st.stop()
 
-    if st.button("🔍 Scan Dashboard"):
-        data = run_all_cached(tickers)
+    # -------- 🔥 BIG CARDS (Top 3) --------
+    st.subheader("🏆 Top Signals")
 
-        if not data:
-            st.warning("ไม่มีสัญญาณ")
-            st.stop()
+    top3 = df.head(3)
 
-        df = pd.DataFrame(data)
+    cols = st.columns(3)
+    for i, r in top3.iterrows():
+        with cols[i % 3]:
+            color = "green" if r['action'] in ["BUY","STRONG BUY"] else "orange"
+            st.markdown(f"""
+            <div style="padding:15px;border-radius:12px;background:#111">
+            <h3>{r['ticker']}</h3>
+            <h2 style="color:{color}">{r['action']}</h2>
+            <h1>{r['score']:.0f}</h1>
+            <p>Confidence {r['confidence']:.0f}%</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-        # Filter
-        df = df[df['score'] >= min_score]
-        if only_buy:
-            df = df[df['action'].isin(["BUY","STRONG BUY"])]
+    st.markdown("---")
 
-        if df.empty:
-            st.warning("ไม่มีตัวที่ผ่าน filter")
-            st.stop()
+    # -------- 📊 HEATMAP --------
+    st.subheader("🟩 Heatmap Score")
+    heat = alt.Chart(df).mark_rect().encode(
+        x='ticker:N',
+        y=alt.value(0),
+        color='score:Q',
+        tooltip=['ticker','score','confidence']
+    ).properties(height=80)
+    st.altair_chart(heat, use_container_width=True)
 
-        # ---------- Heatmap ----------
-        st.subheader("🟩 Market Heatmap")
-        df['color'] = df['score']
+    st.markdown("---")
 
-        heat = alt.Chart(df).mark_rect().encode(
-            x=alt.X('ticker:N', title="Ticker"),
-            y=alt.value(0),
-            color=alt.Color('score:Q', scale=alt.Scale(scheme='greenblue')),
-            tooltip=['ticker','score','confidence','action']
-        ).properties(height=80)
+    # -------- 📋 TABLE (FULL METRICS) --------
+    st.subheader("📋 Full Analysis Table")
 
-        st.altair_chart(heat, use_container_width=True)
+    show = df[[
+        'ticker','score','confidence','rr',
+        'd_action','d_conf',
+        'w_action','w_conf',
+        'm_action','m_conf',
+        'trend','momentum','rsi_ok','breakout','volume','rs','atr_pct'
+    ]].copy()
 
-        # ---------- Ranking ----------
-        st.subheader("📊 Ranking")
-        df_show = df[['ticker','action','score','confidence','rr']].copy()
-        df_show['Signal'] = df_show['action'].apply(lambda x: style_action(x)[0] + " " + x)
-        df_show = df_show.drop(columns=['action'])
+    show['Daily'] = show['d_action'] + " (" + show['d_conf'].astype(int).astype(str) + "%)"
+    show['Weekly'] = show['w_action'] + " (" + show['w_conf'].astype(int).astype(str) + "%)"
+    show['Monthly'] = show['m_action'] + " (" + show['m_conf'].astype(int).astype(str) + "%)"
 
-        st.dataframe(
-            df_show.sort_values(by="score", ascending=False),
-            use_container_width=True
-        )
+    show = show.rename(columns={
+        'ticker':'Ticker',
+        'score':'Score',
+        'confidence':'Confidence',
+        'rr':'RR',
+        'trend':'Trend',
+        'momentum':'Momentum',
+        'rsi_ok':'RSI_OK',
+        'breakout':'Breakout',
+        'volume':'Volume',
+        'rs':'RS',
+        'atr_pct':'ATR%'
+    })
 
-        # ---------- Chart ----------
-        st.subheader("📉 Price Chart")
+    final = show[[
+        'Ticker','Score','Confidence','RR',
+        'Daily','Weekly','Monthly',
+        'Trend','Momentum','RSI_OK','Breakout','Volume','RS','ATR%'
+    ]]
 
-        selected = st.selectbox("เลือกหุ้นดูกราฟ", df['ticker'])
-
-        price_df = load_price(selected)
-
-        if price_df is not None:
-
-            base = alt.Chart(price_df).encode(x='Date:T')
-
-            price = base.mark_line().encode(y='Close:Q')
-            ema20 = base.mark_line().encode(y='EMA20:Q')
-            ema50 = base.mark_line().encode(y='EMA50:Q')
-
-            st.altair_chart(price + ema20 + ema50, use_container_width=True)
-
-            macd = alt.Chart(price_df).mark_line().encode(
-                x='Date:T',
-                y='MACD:Q'
-            )
-
-            st.altair_chart(macd, use_container_width=True)
-
-# ---------- PAGE: TOP 1 ----------
-if page == "🥇 Top 1":
-
-    if st.button("🚀 Get Best Trade"):
-        res = run_top_cached(tickers)
-        r = res[0]
-
-        icon, color = style_action(r['action'])
-
-        st.markdown(f"""
-        ## {icon} {r['ticker']}
-        ### <span style='color:{color}'>{r['action']}</span>
-        """, unsafe_allow_html=True)
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Score", f"{r.get('score',0):.1f}")
-        c2.metric("Confidence", f"{r.get('confidence',0):.0f}%")
-        c3.metric("RR", f"{r.get('rr',0):.2f}")
-
-        if "price" in r:
-            st.write(f"Price: {r['price']:.2f}")
-            st.success(f"TP: {r['tp']:.2f}")
-            st.error(f"SL: {r['sl']:.2f}")
-
-        st.write("Reasons:", r.get("reasons","-"))
+    st.dataframe(final.sort_values(by="Score", ascending=False), use_container_width=True)
