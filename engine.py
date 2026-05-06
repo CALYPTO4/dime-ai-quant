@@ -106,3 +106,37 @@ def risk_model(r):
     sl = r['Close'] - atr * 1.2
     rr = (tp - r['Close']) / (r['Close'] - sl + 1e-9)
     return tp, sl, rr
+
+def backtest_winrate(df):
+    wins = 0
+    total = 0
+
+    for i in range(50, len(df)-10):
+        r = df.iloc[i]
+
+        score, _ = score_row(r, 0)
+
+        # ใช้เงื่อนไขเดียวกับ signal จริง
+        if score < 55:
+            continue
+
+        entry = r['Close']
+        atr = r['ATR']
+
+        tp = entry + atr * 2
+        sl = entry - atr * 1.2
+
+        future = df.iloc[i+1:i+11]
+
+        hit_tp = (future['High'] >= tp).any()
+        hit_sl = (future['Low'] <= sl).any()
+
+        total += 1
+
+        if hit_tp and not hit_sl:
+            wins += 1
+
+    if total == 0:
+        return 50.0
+
+    return (wins / total) * 100
