@@ -2,7 +2,16 @@ import numpy as np
 import pandas as pd
 
 def add_indicators(df):
-    c, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
+
+    # 🔥 FIX: flatten column ถ้าเป็น MultiIndex
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # 🔥 บังคับให้เป็น Series จริง
+    c = df['Close'].astype(float)
+    h = df['High'].astype(float)
+    l = df['Low'].astype(float)
+    v = df['Volume'].astype(float)
 
     df['EMA20'] = c.ewm(span=20).mean()
     df['EMA50'] = c.ewm(span=50).mean()
@@ -21,7 +30,9 @@ def add_indicators(df):
     df['ATR'] = (h - l).rolling(14).mean()
 
     df['Vol_MA'] = v.rolling(20).mean()
-    df['Vol_Spike'] = v > df['Vol_MA'] * 1.5
+
+    # 🔥 FIX สำคัญ: align index ก่อน compare
+    df['Vol_Spike'] = (v.values > (df['Vol_MA'].values * 1.5))
 
     return df.dropna()
 
