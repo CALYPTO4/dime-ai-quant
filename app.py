@@ -2,52 +2,40 @@ import streamlit as st
 from scanner import scan_market
 
 st.set_page_config(layout="wide")
+st.title("🧠 Dime AI Pro — Top 1 Selector")
 
-st.title("🧠 Dime AI Pro Signal System")
+tickers = st.text_input("หุ้น (comma)", "AAPL,MSFT,NVDA,TSLA")
 
-tickers = st.text_input("หุ้น", "AAPL,MSFT,NVDA")
-
-# 🎨 สี + icon
-def style_action(action):
-    if "STRONG BUY" in action:
-        return "🟢", "green"
-    elif "BUY" in action:
-        return "🟩", "lime"
-    elif "WAIT" in action:
-        return "🟡", "orange"
+def style_action(a):
+    if "STRONG BUY" in a: return "🟢", "green"
+    if "BUY" in a: return "🟩", "lime"
+    if "WAIT" in a: return "🟡", "orange"
     return "🔴", "red"
 
-
 @st.cache_data(ttl=600)
-def run_scan(tickers):
-    return scan_market(tickers)
+def run_scan(t):
+    return scan_market(t)
 
+if st.button("🚀 คัดตัวเดียวที่ดีที่สุด"):
+    lst = tuple([x.strip().upper() for x in tickers.split(",") if x.strip()])
 
-if st.button("🚀 วิเคราะห์ขั้นสูง"):
+    with st.spinner("Scanning..."):
+        res = run_scan(lst)
 
-    ticker_list = [t.strip().upper() for t in tickers.split(",")]
+    r = res[0]
+    st.markdown("---")
 
-    with st.spinner("Analyzing market..."):
-        results = run_scan(tuple(ticker_list))
+    icon, color = style_action(r['action'])
+    st.markdown(f"## {icon} {r['ticker']}  \n### <span style='color:{color}'>{r['action']}</span>", unsafe_allow_html=True)
 
-    for r in results:
-        st.markdown("---")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Score", f"{r.get('score',0):.1f}")
+    c2.metric("Confidence", f"{r.get('confidence',0):.0f}%")
+    c3.metric("RR", f"{r.get('rr',0):.2f}")
 
-        icon, color = style_action(r['action'])
+    if "price" in r:
+        st.write(f"Price: {r['price']:.2f}")
+        st.success(f"TP: {r['tp']:.2f}")
+        st.error(f"SL: {r['sl']:.2f}")
 
-        st.markdown(f"""
-        ## {icon} {r['ticker']}
-        ### <span style='color:{color}'>{r['action']}</span>
-        """, unsafe_allow_html=True)
-
-        c1, c2, c3 = st.columns(3)
-
-        c1.metric("📊 Score", f"{r['score']:.1f}")
-        c2.metric("🎯 Confidence", f"{r.get('confidence',50):.0f}%")
-        c3.metric("⚖️ Risk/Reward", f"{r.get('rr',0):.2f}")
-
-        st.write("💡 Reasons:", r.get("reasons","-"))
-
-        if "tp" in r:
-            st.success(f"TP: {r['tp']:.2f}")
-            st.error(f"SL: {r['sl']:.2f}")
+    st.write("Reasons:", r.get("reasons","-"))
