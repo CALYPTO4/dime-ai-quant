@@ -125,3 +125,17 @@ def scan_market(tickers):
     # 🥇 เอา “ตัวเดียวที่ดีที่สุด”
     best = sorted(results, key=lambda x: x['score'], reverse=True)[0]
     return [best]
+
+def scan_all(tickers):
+    spy = safe_download("SPY", "1y", "1d")
+    results = []
+
+    for t in tickers:
+        r = analyze(t, spy)
+        if r:
+            results.append(r)
+
+    if not results:
+        return []
+
+    return sorted(results, key=lambda x: x['score'], reverse=True)
