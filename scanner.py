@@ -1,16 +1,17 @@
 import yfinance as yf
-import pandas as pd
+import time
 from engine import *
 
 def safe_download(ticker):
-    try:
-        df = yf.download(ticker, period="1y", interval="1d", progress=False)
-        if df is None or df.empty:
-            return None
-        return df
-    except Exception as e:
-        print(f"Download error {ticker}: {e}")
-        return None
+    for _ in range(3):
+        try:
+            df = yf.download(ticker, period="1y", interval="1d", progress=False)
+            if df is not None and not df.empty:
+                return df
+        except:
+            pass
+        time.sleep(1)
+    return None
 
 
 def analyze(ticker):
@@ -19,40 +20,31 @@ def analyze(ticker):
     if df is None or len(df) < 60:
         return None
 
-    try:
-        df = add_indicators(df)
-        df = df.dropna()
+    df = add_indicators(df)
 
-        if len(df) < 50:
-            return None
-
-        model = train_model(df)
-
-        last = df.iloc[-1]
-
-        score = score_row(last)
-
-        prob = predict_prob(model, last)
-        score += (prob - 0.5) * 20
-
-        action = decision(score)
-
-        tp, sl, rr = smart_exit(last)
-
-        winrate = backtest(df)
-
-        return {
-            "ticker": ticker,
-            "score": float(score),
-            "action": action,
-            "tp": float(tp),
-            "sl": float(sl),
-            "winrate": float(winrate)
-        }
-
-    except Exception as e:
-        print(f"Analyze error {ticker}: {e}")
+    if len(df) < 50:
         return None
+
+    r = df.iloc[-1]
+
+    score, reasons = score_signal(r)
+
+    # 🔥 Filter สำคัญ (เพิ่มความแม่น)
+    if r['Close'] < r['EMA50']:
+        return None
+
+    tp, sl, rr = risk_model(r)
+
+    return {
+        "ticker": ticker,
+        "price": float(r['Close']),
+        "score": float(score),
+        "action": decision(score),
+        "tp": float(tp),
+        "sl": float(sl),
+        "rr": float(rr),
+        "reasons": ", ".join(reasons)
+    }
 
 
 def scan_market(tickers):
@@ -63,15 +55,7 @@ def scan_market(tickers):
         if r:
             results.append(r)
 
-    # 🔥 fallback ถ้าไม่มีผลลัพธ์เลย
     if not results:
-        return [{
-            "ticker": "NO DATA",
-            "score": 0,
-            "action": "ERROR",
-            "tp": 0,
-            "sl": 0,
-            "winrate": 0
-        }]
+        return [{"ticker": "NO SIGNAL", "score": 0, "action": "WAIT"}]
 
     return sorted(results, key=lambda x: x['score'], reverse=True)
