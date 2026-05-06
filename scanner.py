@@ -2,36 +2,8 @@ import yfinance as yf
 import time
 from engine import *
 
-# --------- utils ---------
-def safe_download(ticker, period="1y", interval="1d"):
-    for _ in range(3):
-        try:
-            df = yf.download(ticker, period=period, interval=interval, progress=False)
-            if df is not None and not df.empty:
-                return df
-        except:
-            pass
-        time.sleep(1)
-    return None
-
-
-def get_news_sentiment(ticker):
-    try:
-        news = yf.Ticker(ticker).news[:5]
-        score = 0
-        for n in news:
-            t = n['title'].lower()
-            if any(x in t for x in ["upgrade","growth","beat","buy"]):
-                score += 1
-            if any(x in t for x in ["downgrade","miss","cut","lawsuit"]):
-                score -= 1
-        return score
-    except:
-        return 0
-
-
+# ---------- helpers ----------
 def relative_strength(df, spy_df):
-    # เทียบผลตอบแทนช่วงเดียวกัน (ประมาณ 60 วัน)
     try:
         r1 = df['Close'].pct_change(60).iloc[-1]
         r2 = spy_df['Close'].pct_change(60).iloc[-1]
@@ -39,6 +11,9 @@ def relative_strength(df, spy_df):
     except:
         return 0.0
 
+def tf_confidence(score):
+    # map score -> 30..95
+    return float(max(30, min(95, score)))
 
 def analyze_tf(ticker, interval, period):
     df = safe_download(ticker, period, interval)
@@ -47,14 +22,40 @@ def analyze_tf(ticker, interval, period):
 
     df = add_indicators(df)
     r = df.iloc[-1]
+
     score, reasons = score_row(r, 0.0)
 
-    return {"score": score, "reasons": reasons}
+    return {
+        "score": float(score),
+        "action": decision(score),
+        "confidence": tf_confidence(score),
+        "reasons": reasons
+    }
 
+def extract_metrics(r, rs_vs_spy):
+    # แปลงเป็นค่าที่อ่านง่ายสำหรับ dashboard
+    trend = int(r['Close'] > r['EMA50'] > r['EMA200'])
+    momentum = int(r['MACD'] > r['Signal'])
+    rsi_ok = int(45 < r['RSI'] < 65)
+    breakout = int(bool(r.get('Breakout', False)))
+    vol = int(bool(r.get('Vol_Spike', False)))
+    slope = int(r.get('Slope50', 0) > 0)
+    rs_flag = int(rs_vs_spy > 0)
+    atrp = float(r.get('ATR_pct', 0))
 
-# --------- main analyze ---------
+    return {
+        "trend": trend,
+        "momentum": momentum,
+        "rsi_ok": rsi_ok,
+        "breakout": breakout,
+        "volume": vol,
+        "slope": slope,
+        "rs": rs_flag,
+        "atr_pct": atrp
+    }
+
+# ---------- main analyze ----------
 def analyze(ticker, spy_df):
-    # Daily สำหรับตัวจริง + RS
     df = safe_download(ticker, "1y", "1d")
     if df is None or len(df) < 120:
         return None
@@ -62,13 +63,13 @@ def analyze(ticker, spy_df):
     df = add_indicators(df)
     r = df.iloc[-1]
 
-    # Hard filter ก่อน
+    # filter คุณภาพ
     if not hard_filter(r):
         return None
 
     rs = relative_strength(df, spy_df)
 
-    # Multi-TF
+    # TF
     d = analyze_tf(ticker, "1d", "1y")
     w = analyze_tf(ticker, "1wk", "2y")
     m = analyze_tf(ticker, "1mo", "5y")
@@ -84,15 +85,23 @@ def analyze(ticker, spy_df):
         (m['score'] if m else 0) * 0.15
     )
 
-    # News
-    news = get_news_sentiment(ticker)
-    total_score += news * 5
+    # news (ถ้ามี)
+    try:
+        news = yf.Ticker(ticker).news[:5]
+        ns = 0
+        for n in news:
+            t = n['title'].lower()
+            if any(x in t for x in ["upgrade","growth","beat","buy"]): ns += 1
+            if any(x in t for x in ["downgrade","miss","cut","lawsuit"]): ns -= 1
+        total_score += ns * 5
+    except:
+        pass
 
-    # Risk
     tp, sl, rr = risk_model(r)
 
-    # Confidence: normalize + rr bonus
     confidence = max(30, min(95, total_score + (rr - 1) * 5))
+
+    metrics = extract_metrics(r, rs)
 
     return {
         "ticker": ticker,
@@ -103,41 +112,25 @@ def analyze(ticker, spy_df):
         "tp": float(tp),
         "sl": float(sl),
         "rr": float(rr),
-        "reasons": ", ".join(reasons)
+        "reasons": ", ".join(reasons),
+
+        # 🔥 TF outputs
+        "d_action": d["action"],
+        "d_conf": d["confidence"],
+        "w_action": (w["action"] if w else "NA"),
+        "w_conf": (w["confidence"] if w else 0),
+        "m_action": (m["action"] if m else "NA"),
+        "m_conf": (m["confidence"] if m else 0),
+
+        # 🔥 metrics for table
+        **metrics
     }
-
-
-def scan_market(tickers):
-    # ใช้ SPY เป็น benchmark RS
-    spy = safe_download("SPY", "1y", "1d")
-    if spy is None:
-        spy = None
-
-    results = []
-    for t in tickers:
-        r = analyze(t, spy)
-        if r:
-            results.append(r)
-
-    if not results:
-        return [{"ticker": "NO SIGNAL", "action": "WAIT", "score": 0, "confidence": 0}]
-
-    # 🥇 เอา “ตัวเดียวที่ดีที่สุด”
-    best = sorted(results, key=lambda x: x['score'], reverse=True)[0]
-    return [best]
 
 def scan_all(tickers):
     spy = safe_download("SPY", "1y", "1d")
     results = []
-
     for t in tickers:
         r = analyze(t, spy)
         if r:
             results.append(r)
-
-    if not results:
-        return []
-
     return sorted(results, key=lambda x: x['score'], reverse=True)
-
-
