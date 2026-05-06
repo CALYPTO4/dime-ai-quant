@@ -139,3 +139,5 @@ def scan_all(tickers):
         return []
 
     return sorted(results, key=lambda x: x['score'], reverse=True)
+
+
