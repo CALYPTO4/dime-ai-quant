@@ -15,37 +15,73 @@ def safe_download(ticker):
 
 
 def analyze(ticker):
-    df = safe_download(ticker)
+    # 🔥 วิเคราะห์ 3 timeframe
+    daily = analyze_tf(ticker, "1d", "1y")
+    weekly = analyze_tf(ticker, "1wk", "2y")
+    monthly = analyze_tf(ticker, "1mo", "5y")
 
-    if df is None or len(df) < 60:
+    if not daily:
+        return None
+
+    # 🔥 รวมคะแนน
+    total_score = (
+        daily['score'] * 0.5 +
+        (weekly['score'] if weekly else 0) * 0.3 +
+        (monthly['score'] if monthly else 0) * 0.2
+    )
+
+    confidence = min(95, max(30, total_score))
+
+    final_action = decision(total_score)
+
+    # 🔥 ดึงข้อมูล price/TP/SL จาก daily
+    df = safe_download(ticker)
+    if df is None:
         return None
 
     df = add_indicators(df)
-
-    if len(df) < 50:
-        return None
-
     r = df.iloc[-1]
-
-    score, reasons = score_signal(r)
-
-    # 🔥 Filter สำคัญ (เพิ่มความแม่น)
-    if r['Close'] < r['EMA50']:
-        return None
 
     tp, sl, rr = risk_model(r)
 
     return {
         "ticker": ticker,
         "price": float(r['Close']),
-        "score": float(score),
-        "action": decision(score),
+        "score": float(total_score),
+        "confidence": float(confidence),
+        "action": final_action,
         "tp": float(tp),
         "sl": float(sl),
         "rr": float(rr),
-        "reasons": ", ".join(reasons)
+        "reasons": ", ".join(daily['reasons'])
     }
+    
+def analyze_tf(ticker, interval, period):
 
+    try:
+        df = yf.download(
+            ticker,
+            period=period,
+            interval=interval,
+            progress=False
+        )
+
+        if df is None or len(df) < 50:
+            return None
+
+        df = add_indicators(df)
+        r = df.iloc[-1]
+
+        score, reasons = score_signal(r)
+
+        return {
+            "score": score,
+            "action": decision(score),
+            "reasons": reasons
+        }
+
+    except:
+        return None
 
 def scan_market(tickers):
     results = []
