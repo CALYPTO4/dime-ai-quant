@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
 
-def add_indicators(df):
-    # flatten columns (กัน MultiIndex จาก yfinance)
+# ---------- Indicators ----------
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    # Flatten MultiIndex (yfinance บางครั้งส่งมา)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
@@ -12,15 +13,15 @@ def add_indicators(df):
     v = df['Volume'].astype(float)
 
     # Trend
-    df['EMA20'] = c.ewm(span=20).mean()
-    df['EMA50'] = c.ewm(span=50).mean()
-    df['EMA200'] = c.ewm(span=200).mean()
+    df['EMA20'] = c.ewm(span=20, adjust=False).mean()
+    df['EMA50'] = c.ewm(span=50, adjust=False).mean()
+    df['EMA200'] = c.ewm(span=200, adjust=False).mean()
 
     # Momentum
-    exp1 = c.ewm(span=12).mean()
-    exp2 = c.ewm(span=26).mean()
+    exp1 = c.ewm(span=12, adjust=False).mean()
+    exp2 = c.ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
-    df['Signal'] = df['MACD'].ewm(span=9).mean()
+    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
 
     delta = c.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
@@ -30,7 +31,7 @@ def add_indicators(df):
 
     # Volatility
     df['ATR'] = (h - l).rolling(14).mean()
-    df['ATR_pct'] = df['ATR'] / c
+    df['ATR_pct'] = df['ATR'] / (c + 1e-9)
 
     # Volume
     df['Vol_MA'] = v.rolling(20).mean()
@@ -40,24 +41,23 @@ def add_indicators(df):
     df['HH_20'] = c.rolling(20).max()
     df['Breakout'] = c >= df['HH_20']
 
-    # Slope (แรงของเทรนด์)
+    # Slope
     df['Slope50'] = df['EMA50'].diff(5)
 
     return df.dropna()
 
-
-def hard_filter(r):
-    # ตัดของคุณภาพต่ำก่อนให้เหลือน้อย
+# ---------- Rules ----------
+def hard_filter(r: pd.Series) -> bool:
+    # คุณภาพขั้นต่ำ
     if r['Close'] < r['EMA200']:
         return False
-    if r['ATR_pct'] > 0.08:   # ผันผวนเกิน
+    if r['ATR_pct'] > 0.08:
         return False
-    if r['RSI'] > 75:         # overbought
+    if r['RSI'] > 75:
         return False
     return True
 
-
-def score_row(r, rs_vs_spy=0.0):
+def score_row(r: pd.Series, rs_vs_spy: float = 0.0):
     score = 0
     reasons = []
 
@@ -72,25 +72,24 @@ def score_row(r, rs_vs_spy=0.0):
     if 45 < r['RSI'] < 65:
         score += 10
 
-    # Breakout + Volume confirm
-    if r['Breakout']:
+    # Breakout + Volume
+    if bool(r.get('Breakout', False)):
         score += 20; reasons.append("Breakout")
 
-    if r['Vol_Spike']:
+    if bool(r.get('Vol_Spike', False)):
         score += 10; reasons.append("Volume Spike")
 
-    # Trend slope
-    if r['Slope50'] > 0:
+    # Slope
+    if float(r.get('Slope50', 0)) > 0:
         score += 5
 
-    # Relative Strength vs SPY
+    # Relative Strength
     if rs_vs_spy > 0:
         score += 10; reasons.append("Outperform SPY")
 
-    return score, reasons
+    return float(score), reasons
 
-
-def decision(score):
+def decision(score: float) -> str:
     if score >= 70:
         return "STRONG BUY"
     elif score >= 55:
@@ -99,30 +98,35 @@ def decision(score):
         return "WAIT"
     return "NO TRADE"
 
+def risk_model(r: pd.Series):
+    atr = float(r['ATR'])
+    entry = float(r['Close'])
+    tp = entry + atr * 2
+    sl = entry - atr * 1.2
+    rr = (tp - entry) / (entry - sl + 1e-9)
+    return float(tp), float(sl), float(rr)
 
-def risk_model(r):
-    atr = r['ATR']
-    tp = r['Close'] + atr * 2
-    sl = r['Close'] - atr * 1.2
-    rr = (tp - r['Close']) / (r['Close'] - sl + 1e-9)
-    return tp, sl, rr
-
-def backtest_winrate(df):
+# ---------- Backtest (rolling) ----------
+def backtest_winrate(df: pd.DataFrame) -> float:
+    """
+    Winrate โดยใช้กฎเดียวกับ signal:
+    - Trigger: score >= 55
+    - TP = +2*ATR, SL = -1.2*ATR
+    - Horizon: 10 วันถัดไป
+    """
     wins = 0
     total = 0
 
-    for i in range(50, len(df)-10):
+    # ต้องมี buffer พอสำหรับ ATR/EMA
+    for i in range(60, len(df) - 10):
         r = df.iloc[i]
+        score, _ = score_row(r, 0.0)
 
-        score, _ = score_row(r, 0)
-
-        # ใช้เงื่อนไขเดียวกับ signal จริง
         if score < 55:
             continue
 
-        entry = r['Close']
-        atr = r['ATR']
-
+        entry = float(r['Close'])
+        atr = float(r['ATR'])
         tp = entry + atr * 2
         sl = entry - atr * 1.2
 
@@ -132,11 +136,10 @@ def backtest_winrate(df):
         hit_sl = (future['Low'] <= sl).any()
 
         total += 1
-
         if hit_tp and not hit_sl:
             wins += 1
 
     if total == 0:
         return 50.0
 
-    return (wins / total) * 100
+    return float((wins / total) * 100.0)
