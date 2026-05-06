@@ -32,6 +32,9 @@ def analyze_tf(ticker, interval, period):
         "reasons": reasons
     }
 
+# 🔥 คำนวณ winrate
+winrate = backtest_winrate(df)
+
 def extract_metrics(r, rs_vs_spy):
     # แปลงเป็นค่าที่อ่านง่ายสำหรับ dashboard
     trend = int(r['Close'] > r['EMA50'] > r['EMA200'])
