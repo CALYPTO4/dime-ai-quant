@@ -94,7 +94,10 @@ if page == "📊 Dashboard":
         show['Daily'] = show['d_action'] + " (" + show['d_conf'].astype(int).astype(str) + "%)"
         show['Weekly'] = show['w_action'] + " (" + show['w_conf'].astype(int).astype(str) + "%)"
         show['Monthly'] = show['m_action'] + " (" + show['m_conf'].astype(int).astype(str) + "%)"
-
+        show['Expectancy'] = df['expectancy'].round(2).astype(str) + "%"
+        show['TF_Consensus'] = df['tf_consensus'].astype(str) + "/3"
+        show['Penalties'] = df['penalties']
+        
         show = show.rename(columns={
             'ticker':'Ticker',
             'score':'Score',
@@ -134,7 +137,13 @@ if page == "🥇 Top 1":
         c2.metric("Confidence", f"{r.get('confidence',0):.0f}%")
         c3.metric("Winrate", f"{r.get('winrate',0):.0f}%")
         c4.metric("RR", f"{r.get('rr',0):.2f}")
-
+        
+        c5, c6 = st.columns(2)
+        c5.metric("Expectancy", f"{r.get('expectancy',0):.2f}%")
+        c6.metric("TF Consensus", f"{r.get('tf_consensus',0)}/3")
+if r.get('penalties'):
+    
+    st.warning(f"⚠️ Penalties: {r['penalties']}")
         if "price" in r:
             st.write(f"Price: {r['price']:.2f}")
             st.success(f"TP: {r['tp']:.2f}")
